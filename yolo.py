@@ -17,10 +17,10 @@ from utils.utils_bbox import DecodeBox
 '''
 class YOLO(object):
     _defaults = {
+        #输入可变参数字典，键对值和对应的值
         #--------------------------------------------------------------------------#
         #   使用自己训练好的模型进行预测一定要修改model_path和classes_path！
         #   model_path指向logs文件夹下的权值文件，classes_path指向model_data下的txt
-        #
         #   训练好后logs文件夹下存在多个权值文件，选择验证集损失较低的即可。
         #   验证集损失较低不代表mAP较高，仅代表该权值在验证集上泛化性能较好。
         #   如果出现shape不匹配，同时要注意训练时的model_path和classes_path参数的修改
@@ -57,7 +57,8 @@ class YOLO(object):
         "cuda"              : True,
     }
 
-    @classmethod
+    @classmethod#可以用于类去创建一些预处理的实例，描述类方法----修饰符
+    #类方法让类模版具有记忆力，cls表示本类，在类方法中无法用self来调用实例变量
     def get_defaults(cls, n):
         if n in cls._defaults:
             return cls._defaults[n]
@@ -113,38 +114,44 @@ class YOLO(object):
     def detect_image(self, image, crop = False, count = False):
         image_shape = np.array(np.shape(image)[0:2])
         #---------------------------------------------------------#
+        #   RGB图片有预训练权重，预测效果更好，
         #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
         #   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
         #---------------------------------------------------------#
         image       = cvtColor(image)
         #---------------------------------------------------------#
-        #   给图像增加灰条，实现不失真的resize
+        #   给图像增加灰度条，实现不失真的resize，416,416
         #   也可以直接resize进行识别
         #---------------------------------------------------------#
         image_data  = resize_image(image, (self.input_shape[1],self.input_shape[0]), self.letterbox_image)
         #---------------------------------------------------------#
-        #   添加上batch_size维度
+        #   图像归一化，preprocess_input（）操作，除255，转为0，1之间，添加上batch_size维度
+        #   transpose，转换维度，输入图像为H,W,C,利用transpose(x,(2,0,1))转为C,H,W数据维度
+        #   expande_dims(x,0)在x数据第0维增加一维，即添加batch_size维度，则图像数据转为(1,C,H,W)
         #---------------------------------------------------------#
         image_data  = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
         with torch.no_grad():
-            images = torch.from_numpy(image_data)
-            if self.cuda:
+            images = torch.from_numpy(image_data)#将图像数据从浮点型ndarray格式转为tensor张量格式
+            if self.cuda:#如果调用cuda，则将图片数据传到gpu上处理
                 images = images.cuda()
             #---------------------------------------------------------#
             #   将图像输入网络当中进行预测！
+            #   net(images)得到三个输出特征预测框结果
+            #   bbox_util.decode_box(outputs)得到预测框的解码结果；
             #---------------------------------------------------------#
             outputs = self.net(images)
             outputs = self.bbox_util.decode_box(outputs)
             #---------------------------------------------------------#
-            #   将预测框进行堆叠，然后进行非极大抑制
+            #   torch.cat(outputs, 1)对解码后的预测框数据进行堆叠
+            #   将预测框进行堆叠，然后进行非极大抑制，筛选出一定区域内属于同一种类得分最大的框
             #---------------------------------------------------------#
             results = self.bbox_util.non_max_suppression(torch.cat(outputs, 1), self.num_classes, self.input_shape, 
                         image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
                                                     
-            if results[0] is None: 
+            if results[0] is None: #判断结果是否检测到物体，则继续处理，否则返回原图
                 return image
-
+            #   获得预测框种类top_label，预测框置信度top_conf，预测框的坐标top_boxes
             top_label   = np.array(results[0][:, 6], dtype = 'int32')
             top_conf    = results[0][:, 4] * results[0][:, 5]
             top_boxes   = results[0][:, :4]
@@ -169,8 +176,8 @@ class YOLO(object):
         #   是否进行目标的裁剪
         #---------------------------------------------------------#
         if crop:
-            for i, c in list(enumerate(top_label)):
-                top, left, bottom, right = top_boxes[i]
+            for i, c in list(enumerate(top_label)):#对所有框循环
+                top, left, bottom, right = top_boxes[i]#坐标
                 top     = max(0, np.floor(top).astype('int32'))
                 left    = max(0, np.floor(left).astype('int32'))
                 bottom  = min(image.size[1], np.floor(bottom).astype('int32'))
@@ -186,9 +193,9 @@ class YOLO(object):
         #   图像绘制
         #---------------------------------------------------------#
         for i, c in list(enumerate(top_label)):
-            predicted_class = self.class_names[int(c)]
-            box             = top_boxes[i]
-            score           = top_conf[i]
+            predicted_class = self.class_names[int(c)]  #预测框的种类
+            box             = top_boxes[i]              #预测框的坐标
+            score           = top_conf[i]               #预测框的置信度
 
             top, left, bottom, right = box
 

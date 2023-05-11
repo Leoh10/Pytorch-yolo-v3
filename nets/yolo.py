@@ -12,7 +12,7 @@ def conv2d(filter_in, filter_out, kernel_size):
         ("bn", nn.BatchNorm2d(filter_out)),
         ("relu", nn.LeakyReLU(0.1)),
     ]))
-
+#   数据维度有问题----pytorch里面的数据维度
 #------------------------------------------------------------------------#
 #   make_last_layers里面一共有七个卷积，前五个用于提取特征。
 #   后两个用于获得yolo网络的预测结果
@@ -65,14 +65,17 @@ class YoloBody(nn.Module):
         #   final_out_filter0 = final_out_filter1 = final_out_filter2 = 75
         #   out_filters=[64, 128, 256, 512, 1024]，-1，-2，-3，即倒着取list数据，依次为1024,512,256
         #   anchors_mask从代码及结果看值设定为[3,3,3],存在3个先验框，voc数据集目标类别是20类;
-        #  last_layer0= make_last_layers([512,1024],1024,75)
-        #  last_layer1= make_last_layers([256, 768],512,75)
+        #   last_layer0= make_last_layers([512,1024],1024,75)
+        #   last_layer1= make_last_layers([256, 768],512,75)
         #   last_layer2=make_last_layers([128, 384],256,75)
+        #   len(anchors_mask[0])=====3
+        #   num_classes为数据总共的分类
         #------------------------------------------------------------------------#
         self.last_layer0            = make_last_layers([512, 1024], out_filters[-1], len(anchors_mask[0]) * (num_classes + 5))
 
         self.last_layer1_conv       = conv2d(512, 256, 1)#1*1卷积调整通道数
         self.last_layer1_upsample   = nn.Upsample(scale_factor=2, mode='nearest')#利用上采样将特征图扩张为26*26
+        #   last_layer1_upsample数据维度为1,26,26,256
         self.last_layer1            = make_last_layers([256, 512], out_filters[-2] + 256, len(anchors_mask[1]) * (num_classes + 5))
 
         self.last_layer2_conv       = conv2d(256, 128, 1)
@@ -81,10 +84,11 @@ class YoloBody(nn.Module):
 
     def forward(self, x):
         #---------------------------------------------------#   
+        #   进行前向传播，连接网络层，卷积和上采样
         #   获得三个有效特征层，他们的shape分别是：
-        #   52,52,256；---第五层
-        #   26,26,512；---第六层
-        #   13,13,1024；--第七层
+        #   52,52,256；---第五层---x2
+        #   26,26,512；---第六层---x1
+        #   13,13,1024；--第七层---x0
         #---------------------------------------------------#
         x2, x1, x0 = self.backbone(x)
 
@@ -93,7 +97,7 @@ class YoloBody(nn.Module):
         #   out0 = (batch_size,255,13,13)
         #---------------------------------------------------#
         # 13,13,1024 -> 13,13,512 -> 13,13,1024 -> 13,13,512 -> 13,13,1024 -> 13,13,512
-        # 单独把5次卷积的操作保存在out0_branch中
+        # 单独把5次卷积的操作保存在out0_branch中，分开操作，后两次卷积是分类与回归的结果--out0---13,13,75
         out0_branch = self.last_layer0[:5](x0)
         out0        = self.last_layer0[5:](out0_branch)
 
@@ -110,6 +114,7 @@ class YoloBody(nn.Module):
         #   out1 = (batch_size,255,26,26)
         #---------------------------------------------------#
         # 26,26,768 -> 26,26,256 -> 26,26,512 -> 26,26,256 -> 26,26,512 -> 26,26,256
+        # 单独把5次卷积的操作保存在out1_branch中，分开操作，后两次卷积是分类与回归的结果--out1--26,26,75
         out1_branch = self.last_layer1[:5](x1_in)
         out1        = self.last_layer1[5:](out1_branch)
 
@@ -128,4 +133,5 @@ class YoloBody(nn.Module):
         #   out0---13,13,75-----随后利用三个矩阵来判断先验框是否包含物体以及对物体进行分类预测与先验框的调整参数的回归
         #   out1---26,26,75
         #   out2---52,52,75
+        #   对先验框的调整过程称为解码过程
         return out0, out1, out2
