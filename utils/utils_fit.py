@@ -35,7 +35,7 @@ def fit_one_epoch(model_train, model, yolo_loss, loss_history, eval_callback, op
 
             loss_value_all  = 0
             #----------------------#
-            #   计算损失
+            #   计算损失----共计算3次，因为是有3个有效特征层
             #----------------------#
             for l in range(len(outputs)):
                 loss_item = yolo_loss(l, outputs[l], targets)

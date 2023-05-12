@@ -97,24 +97,26 @@ class YOLOLoss(nn.Module):
         
         return giou
         
-    def forward(self, l, input, targets=None):
+    def forward(self, l, input, targets=None):#该方法有3个输入
         #----------------------------------------------------#
         #   l代表的是，当前输入进来的有效特征层，是第几个有效特征层
-        #   input的shape为  bs, 3*(5+num_classes), 13, 13
+        #   input代表当前特征层的输出数据的shape为  bs, 3*(5+num_classes), 13, 13
         #                   bs, 3*(5+num_classes), 26, 26
         #                   bs, 3*(5+num_classes), 52, 52
-        #   targets代表的是真实框。
+        #   targets代表的是真实框。ground truth
         #----------------------------------------------------#
         #--------------------------------#
         #   获得图片数量，特征层的高和宽
+        #   batchsize 图片数量
         #   13和13
         #--------------------------------#
         bs      = input.size(0)
         in_h    = input.size(2)
         in_w    = input.size(3)
         #-----------------------------------------------------------------------#
-        #   计算步长
+        #   计算步长stride_h，
         #   每一个特征点对应原来的图片上多少个像素点
+        #   416/13=32
         #   如果特征层为13x13的话，一个特征点就对应原来的图片上的32个像素点
         #   如果特征层为26x26的话，一个特征点就对应原来的图片上的16个像素点
         #   如果特征层为52x52的话，一个特征点就对应原来的图片上的8个像素点
@@ -124,12 +126,13 @@ class YOLOLoss(nn.Module):
         stride_h = self.input_shape[0] / in_h
         stride_w = self.input_shape[1] / in_w
         #-------------------------------------------------#
+        #   将先验框进行缩放，缩放到特征层尺度大小
         #   此时获得的scaled_anchors大小是相对于特征层的
         #-------------------------------------------------#
         scaled_anchors  = [(a_w / stride_w, a_h / stride_h) for a_w, a_h in self.anchors]
         #-----------------------------------------------#
         #   输入的input一共有三个，他们的shape分别是
-        #   bs, 3*(5+num_classes), 13, 13 => batch_size, 3, 13, 13, 5 + num_classes
+        #   view操作得到---->bs, 3*(5+num_classes), 13, 13 ---利用permute函数进行维度变换更换为=> batch_size, 3, 13, 13, 5 + num_classes
         #   batch_size, 3, 26, 26, 5 + num_classes
         #   batch_size, 3, 52, 52, 5 + num_classes
         #-----------------------------------------------#
@@ -253,28 +256,35 @@ class YOLOLoss(nn.Module):
         return inter / union  # [A,B]
     
     def get_target(self, l, targets, anchors, in_h, in_w):
+        #   获取真实框及信息的函数
         #-----------------------------------------------------#
         #   计算一共有多少张图片
         #-----------------------------------------------------#
         bs              = len(targets)
         #-----------------------------------------------------#
-        #   用于选取哪些先验框不包含物体
+        #   用于选取哪些特征点上3个先验框是不包含物体的，(bs,3,13,13)
+        #   默认先置为1，认为所有先验框内部都不包含物体，后续再判断哪些框是包含物体的
         #-----------------------------------------------------#
         noobj_mask      = torch.ones(bs, len(self.anchors_mask[l]), in_h, in_w, requires_grad = False)
         #-----------------------------------------------------#
-        #   让网络更加去关注小目标
+        #   参数是进行一个小目标和大目标损失权重的区分，将小目标框权重进行增强，大目标框权重进行减弱，让网络更加去关注小目标
         #-----------------------------------------------------#
         box_loss_scale  = torch.zeros(bs, len(self.anchors_mask[l]), in_h, in_w, requires_grad = False)
         #-----------------------------------------------------#
         #   batch_size, 3, 13, 13, 5 + num_classes
+        #   self.bbox_attrs     = 5 + num_classes
+        #   y_true指的是图片的真实框的参数，维度为1,3,13,13，5+num_classes---0矩阵
         #-----------------------------------------------------#
         y_true          = torch.zeros(bs, len(self.anchors_mask[l]), in_h, in_w, self.bbox_attrs, requires_grad = False)
-        for b in range(bs):            
+        for b in range(bs):    
+        #   若没有输入图片则跳过循环，执行其他操作        
             if len(targets[b])==0:
                 continue
+            #   利用zeros_like生成相同维度大小的x,初始值为0
             batch_target = torch.zeros_like(targets[b])
             #-------------------------------------------------------#
             #   计算出正样本在特征层上的中心点
+            #   由于真实框是归一化的结果，乘特征层的宽高，就可以将真实框映射到特征层上
             #-------------------------------------------------------#
             batch_target[:, [0,2]] = targets[b][:, [0,2]] * in_w
             batch_target[:, [1,3]] = targets[b][:, [1,3]] * in_h
@@ -298,8 +308,9 @@ class YOLOLoss(nn.Module):
             #   [每个真实框最大的重合度max_iou, 每一个真实框最重合的先验框的序号]
             #-------------------------------------------------------#
             best_ns = torch.argmax(self.calculate_iou(gt_box, anchor_shapes), dim=-1)
-
+            #   下面的循环每次会取两个值，t是每个真实框最大的重合度max_iou,best_n指的是每个真实框最重合的先验框的序号
             for t, best_n in enumerate(best_ns):
+            #   判断这个先验框的序号是否属于当前这个特征层，
                 if best_n not in self.anchors_mask[l]:
                     continue
                 #----------------------------------------#
@@ -307,7 +318,8 @@ class YOLOLoss(nn.Module):
                 #----------------------------------------#
                 k = self.anchors_mask[l].index(best_n)
                 #----------------------------------------#
-                #   获得真实框属于哪个网格点
+                #   获得真实框属于哪个网格点，计算出真实坐标
+                #   取整可以找到左上角的网格点，因为yolo v3是根据左上角的网格点进行预测的
                 #----------------------------------------#
                 i = torch.floor(batch_target[t, 0]).long()
                 j = torch.floor(batch_target[t, 1]).long()
@@ -317,7 +329,8 @@ class YOLOLoss(nn.Module):
                 c = batch_target[t, 4].long()
 
                 #----------------------------------------#
-                #   noobj_mask代表无目标的特征点
+                #   noobj_mask代表无目标的特征点，
+                #   在前面定义了他的数据维度都是1，这里就利用目标检测确定的点位来置为0，表示没有目标
                 #----------------------------------------#
                 noobj_mask[b, k, j, i] = 0
                 #----------------------------------------#
@@ -329,8 +342,10 @@ class YOLOLoss(nn.Module):
                     #----------------------------------------#
                     y_true[b, k, j, i, 0] = batch_target[t, 0] - i.float()
                     y_true[b, k, j, i, 1] = batch_target[t, 1] - j.float()
+                    #   获得h,w方向的应该有的调整参数，
                     y_true[b, k, j, i, 2] = math.log(batch_target[t, 2] / anchors[best_n][0])
                     y_true[b, k, j, i, 3] = math.log(batch_target[t, 3] / anchors[best_n][1])
+                    #   对4序号
                     y_true[b, k, j, i, 4] = 1
                     y_true[b, k, j, i, c + 5] = 1
                 else:
