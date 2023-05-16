@@ -21,27 +21,28 @@ class YOLOLoss(nn.Module):
 
         self.giou           = True
         self.balance        = [0.4, 1.0, 4]
-        self.box_ratio      = 0.05
+        self.box_ratio      = 0.05  #损失的权重
         self.obj_ratio      = 5 * (input_shape[0] * input_shape[1]) / (416 ** 2)
         self.cls_ratio      = 1 * (num_classes / 80)
 
         self.ignore_threshold = 0.5
         self.cuda           = cuda
 
-    def clip_by_tensor(self, t, t_min, t_max):
-        t = t.float()
+    def clip_by_tensor(self, t, t_min, t_max):#函数的作用是：使t的值变到t_min和t_max之间
+        t = t.float()#  
         result = (t >= t_min).float() * t + (t < t_min).float() * t_min
         result = (result <= t_max).float() * result + (result > t_max).float() * t_max
         return result
 
     def MSELoss(self, pred, target):#均方误差（Mean square error）---预测值与目标值之间差值平方和的均值
         return torch.pow(pred - target, 2)
-    #
+    #   torch.pow(x,2)-----返回x的平方值，即求得两个张量的差值平方
 
-    def BCELoss(self, pred, target):
+    def BCELoss(self, pred, target):#   一般计算pred要经过sigmoid或softmax，转为0,1之间
         epsilon = 1e-7
-        pred    = self.clip_by_tensor(pred, epsilon, 1.0 - epsilon)
+        pred    = self.clip_by_tensor(pred, epsilon, 1.0 - epsilon)#使得预测值在1e-7~1-1e-7之间
         output  = - target * torch.log(pred) - (1.0 - target) * torch.log(1.0 - pred)
+        #   2分类交叉熵损失，公式如上output所示w表示权重值为1
         return output
 
     def box_giou(self, b1, b2):
@@ -90,7 +91,7 @@ class YOLOLoss(nn.Module):
         enclose_maxes   = torch.max(b1_maxes, b2_maxes)
         enclose_wh      = torch.max(enclose_maxes - enclose_mins, torch.zeros_like(intersect_maxes))
         #----------------------------------------------------#
-        #   计算对角线距离
+        #   计算对角线距离---------计算包裹的面积
         #----------------------------------------------------#
         enclose_area    = enclose_wh[..., 0] * enclose_wh[..., 1]
         giou            = iou - (enclose_area - union_area) / enclose_area
@@ -181,7 +182,7 @@ class YOLOLoss(nn.Module):
         #   noobj_mask：用于选取哪些先验框不包含物体  无目标为1 有目标为0
         #   box_loss_scale：用于获得xywh的比例 大目标loss权重小，小目标loss权重大 让网络更加去关注小目标
         #   y_true: batch_size, 3, 13, 13, 5 + num_classes  真实框
-        #   # y_true的格式[1,3,13,13,10] 并不是每一特征点上都有真实框的，没有真实框的地方为0
+        #   # y_true的格式[1,3,13,13,25] 并不是每一特征点上都有真实框的，没有真实框的地方为0
         #----------------------------------------------------------------#
         noobj_mask, pred_boxes = self.get_ignore(l, x, y, h, w, targets, scaled_anchors, in_h, in_w, noobj_mask)
 
@@ -195,21 +196,22 @@ class YOLOLoss(nn.Module):
         #--------------------------------------------------------------------------#
         box_loss_scale = 2 - box_loss_scale    
         loss        = 0
-        obj_mask    = y_true[..., 4] == 1   # 是否有物体
+        obj_mask    = y_true[..., 4] == 1   # 是否有物体，置信度
         n           = torch.sum(obj_mask)
         if n != 0:
             if self.giou:
                 #---------------------------------------------------------------#
                 #   计算预测结果和真实结果的giou
-                #   正样本，编码后的长宽与xy轴偏移量与预测值的差距
+                #   正样本，编码后的长宽与xy轴偏移量与预测值的差距;使用到了x,y,w,h
                 #----------------------------------------------------------------#
                 giou        = self.box_giou(pred_boxes, y_true[..., :4]).type_as(x)
-                # giou torch.Size([1, 3, 13, 13])
+                # giou torch.Size([1, 3, 13, 13])------
+                #   此时，GIOU作为loss函数时，为L=1−GIOU，当A、B两框不相交时A∪B值不变，最大化GIOU就是就小化C，这样就会促使两个框不断靠近。
                 loss_loc    = torch.mean((1 - giou)[obj_mask])
             else:
                 #-----------------------------------------------------------#
                 #   计算中心偏移情况的loss，使用BCELoss效果好一些，因为计算中心偏移使用了sigmoid,所以不能使用均方差损失，
-                #   选用交叉熵损失
+                #   选用交叉熵损失----最后都求均值
                 #-----------------------------------------------------------#
                 loss_x      = torch.mean(self.BCELoss(x[obj_mask], y_true[..., 0][obj_mask]) * box_loss_scale[obj_mask])
                 loss_y      = torch.mean(self.BCELoss(y[obj_mask], y_true[..., 1][obj_mask]) * box_loss_scale[obj_mask])
@@ -222,7 +224,7 @@ class YOLOLoss(nn.Module):
                 #   实际存在的框，种类预测结果与实际结果的对比。            
             loss_cls    = torch.mean(self.BCELoss(pred_cls[obj_mask], y_true[..., 5:][obj_mask]))
             loss        += loss_loc * self.box_ratio + loss_cls * self.cls_ratio
-
+                #   置信度损失
         loss_conf   = torch.mean(self.BCELoss(conf, obj_mask.type_as(conf))[noobj_mask.bool() | obj_mask])
         loss        += loss_conf * self.balance[l] * self.obj_ratio#所有损失相加
         # if n != 0:
@@ -468,7 +470,9 @@ class YOLOLoss(nn.Module):
         pred_boxes_w    = torch.unsqueeze(torch.exp(w) * anchor_w, -1)
         pred_boxes_h    = torch.unsqueeze(torch.exp(h) * anchor_h, -1)
         pred_boxes      = torch.cat([pred_boxes_x, pred_boxes_y, pred_boxes_w, pred_boxes_h], dim = -1)
+        #   若dim为负，则将被转化为dim+input.dim()+1，即2，即倒数第一个维度
         #   对batchsize进行一个循环-----对一张图片进行循环
+        #   ---------------------------------------------------------------------------------------------------
         for b in range(bs):           
             #-------------------------------------------------------#
             #   若真实框与先验框计算重合度，若计算重合度大于某一个设定阈值，
@@ -499,9 +503,10 @@ class YOLOLoss(nn.Module):
                 #   anch_ious_max   num_anchors
                 #-------------------------------------------------------#
                 anch_ious_max, _    = torch.max(anch_ious, dim = 0)
+                #   torch.max(x,dim=0)，2维数据，0表示行间对比，dim=1表示列间比较
                 anch_ious_max       = anch_ious_max.view(pred_boxes[b].size()[:3])
                 #   下面这行代码，即设置重合度大的先验框为忽略的先验框，而将剩余先验框设置为负样本，保证正负样本的平衡
-                noobj_mask[b][anch_ious_max > self.ignore_threshold] = 0
+                noobj_mask[b][anch_ious_max > self.ignore_threshold] = 0#设置0表示有目标，1表示无目标
         return noobj_mask, pred_boxes
 
 def weights_init(net, init_type='normal', init_gain = 0.02):#假如不利用预训练权重和主干权重，
