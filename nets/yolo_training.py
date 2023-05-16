@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-class YOLOLoss(nn.Module):
+class YOLOLoss(nn.Module): 
     def __init__(self, anchors, num_classes, input_shape, cuda, anchors_mask = [[6,7,8], [3,4,5], [0,1,2]]):
         super(YOLOLoss, self).__init__()
         #-----------------------------------------------------------#
@@ -34,8 +34,9 @@ class YOLOLoss(nn.Module):
         result = (result <= t_max).float() * result + (result > t_max).float() * t_max
         return result
 
-    def MSELoss(self, pred, target):
+    def MSELoss(self, pred, target):#均方误差（Mean square error）---预测值与目标值之间差值平方和的均值
         return torch.pow(pred - target, 2)
+    #
 
     def BCELoss(self, pred, target):
         epsilon = 1e-7
@@ -82,7 +83,6 @@ class YOLOLoss(nn.Module):
         b2_area         = b2_wh[..., 0] * b2_wh[..., 1]
         union_area      = b1_area + b2_area - intersect_area
         iou             = intersect_area / union_area
-
         #----------------------------------------------------#
         #   找到包裹两个框的最小框的左上角和右下角
         #----------------------------------------------------#
@@ -149,14 +149,14 @@ class YOLOLoss(nn.Module):
         #   y数据维度为bs,3,13,13,1----->1,3,13,13,1
         #   prediction[..., 0]----前面维度都要，只在最后一个维度上取数据
         #-----------------------------------------------#
-        x = torch.sigmoid(prediction[..., 0])
-        y = torch.sigmoid(prediction[..., 1])
+        x = torch.sigmoid(prediction[..., 0])   #   Center x
+        y = torch.sigmoid(prediction[..., 1])   #   Center y
         #-----------------------------------------------#
         #   先验框的宽高调整参数
         #   w数据维度为bs,3,13,13,1----->1,3,13,13,1
         #-----------------------------------------------#
-        w = prediction[..., 2]
-        h = prediction[..., 3]
+        w = prediction[..., 2]                  #   宽
+        h = prediction[..., 3]                  #   高
         #-----------------------------------------------#
         #   获得置信度，是否有物体
         #   conf数据维度为bs,3,13,13,1----->1,3,13,13,1
@@ -169,6 +169,8 @@ class YOLOLoss(nn.Module):
         #   pred_cls数据维度为bs,3,13,13,num_classes----->1,3,13,13,num_classes----VOC数据集的结果即1,3,13,13,20
         #-----------------------------------------------#
         #   获得网络应该有的预测结果
+        #   targets：真实框数据  targets类似于[0.6358, 0.5204, 0.0697, 0.0312, 0.0000]这个样子
+        #   scaled_anchors：相对于特征层的先验框大小
         #-----------------------------------------------#
         y_true, noobj_mask, box_loss_scale = self.get_target(l, targets, scaled_anchors, in_h, in_w)
         #---------------------------------------------------------------#
@@ -176,6 +178,10 @@ class YOLOLoss(nn.Module):
         #   将预测结果进行解码，判断预测结果和真实值的重合程度
         #   如果重合程度过大则忽略，因为这些特征点属于预测比较准确的特征点
         #   作为负样本不合适，保留重合度一般的先验框作为负样本，保证正负样本平衡。
+        #   noobj_mask：用于选取哪些先验框不包含物体  无目标为1 有目标为0
+        #   box_loss_scale：用于获得xywh的比例 大目标loss权重小，小目标loss权重大 让网络更加去关注小目标
+        #   y_true: batch_size, 3, 13, 13, 5 + num_classes  真实框
+        #   # y_true的格式[1,3,13,13,10] 并不是每一特征点上都有真实框的，没有真实框的地方为0
         #----------------------------------------------------------------#
         noobj_mask, pred_boxes = self.get_ignore(l, x, y, h, w, targets, scaled_anchors, in_h, in_w, noobj_mask)
 
@@ -189,14 +195,16 @@ class YOLOLoss(nn.Module):
         #--------------------------------------------------------------------------#
         box_loss_scale = 2 - box_loss_scale    
         loss        = 0
-        obj_mask    = y_true[..., 4] == 1
+        obj_mask    = y_true[..., 4] == 1   # 是否有物体
         n           = torch.sum(obj_mask)
         if n != 0:
             if self.giou:
                 #---------------------------------------------------------------#
                 #   计算预测结果和真实结果的giou
+                #   正样本，编码后的长宽与xy轴偏移量与预测值的差距
                 #----------------------------------------------------------------#
                 giou        = self.box_giou(pred_boxes, y_true[..., :4]).type_as(x)
+                # giou torch.Size([1, 3, 13, 13])
                 loss_loc    = torch.mean((1 - giou)[obj_mask])
             else:
                 #-----------------------------------------------------------#
@@ -211,7 +219,7 @@ class YOLOLoss(nn.Module):
                 loss_w      = torch.mean(self.MSELoss(w[obj_mask], y_true[..., 2][obj_mask]) * box_loss_scale[obj_mask])
                 loss_h      = torch.mean(self.MSELoss(h[obj_mask], y_true[..., 3][obj_mask]) * box_loss_scale[obj_mask])
                 loss_loc    = (loss_x + loss_y + loss_h + loss_w) * 0.1
-
+                #   实际存在的框，种类预测结果与实际结果的对比。            
             loss_cls    = torch.mean(self.BCELoss(pred_cls[obj_mask], y_true[..., 5:][obj_mask]))
             loss        += loss_loc * self.box_ratio + loss_cls * self.cls_ratio
 
@@ -283,7 +291,8 @@ class YOLOLoss(nn.Module):
         #-----------------------------------------------------#
         noobj_mask      = torch.ones(bs, len(self.anchors_mask[l]), in_h, in_w, requires_grad = False)
         #-----------------------------------------------------#
-        #   参数是进行一个小目标和大目标损失权重的区分，将小目标框权重进行增强，大目标框权重进行减弱，让网络更加去关注小目标
+        #   参数是进行一个小目标和大目标损失权重的区分，将小目标框权重进行增强，大目标框权重进行减弱，
+        #   让网络更加去关注小目标
         #   box_loss_scale = (bs,3,13,13)
         #-----------------------------------------------------#
         box_loss_scale  = torch.zeros(bs, len(self.anchors_mask[l]), in_h, in_w, requires_grad = False)
@@ -303,6 +312,9 @@ class YOLOLoss(nn.Module):
             #-------------------------------------------------------#
             #   计算出正样本在特征层上的中心点
             #   由于真实框是归一化的结果，乘特征层的宽高，就可以将真实框映射到特征层上
+            #   targets[1][:,[0,2]]表示是真实目标的x1,x2-------------标签数据都是x1,y1,x2,y2--对应位置0,1,2,3
+            #   targets[1][:,[1,3]]表示是真实目标的y1,y2
+            #   targets：[0.6358, 0.5204, 0.0697, 0.0312, 0.0000] ：x,y,h,w,置信度
             #-------------------------------------------------------#
             batch_target[:, [0,2]] = targets[b][:, [0,2]] * in_w
             batch_target[:, [1,3]] = targets[b][:, [1,3]] * in_h
@@ -310,7 +322,7 @@ class YOLOLoss(nn.Module):
             batch_target = batch_target.cpu()#把数据转移到cpu上
             
             #-------------------------------------------------------#
-            #   将真实框转换一个形式
+            #   将真实框转换一个形式----这里转换是为了数据可以送到这个函数 self.calculate_iou  计算重合度
             #   num_true_box, 4
             #   torch.FloatTensor([1,2])，可以将变量转为浮点型32位，转换的变量类型为列表或数组
             #   torch.cat((x,y),1),可以将x(1,2),y[:,2:4]表示2,3位置数据----gt_box==[0,0,batch_target[:, 2:4]],4个维度，只要宽高值，便于计算IOU
@@ -344,6 +356,7 @@ class YOLOLoss(nn.Module):
             #   best_ns:返回两个值
             #   [每个真实框最大的重合度max_iou, 每一个真实框最重合的先验框的序号]
             #   argmax(x,dim=-1),返回指定维度的最大值的序号
+
             #-------------------------------------------------------#
             best_ns = torch.argmax(self.calculate_iou(gt_box, anchor_shapes), dim=-1)
             #   下面的循环每次会取两个值，t是每个真实框最大的重合度max_iou,best_n指的是每个真实框最重合的先验框的序号
@@ -356,12 +369,13 @@ class YOLOLoss(nn.Module):
                 #   anchors_mask[l]=[3,4,5]
                 #   anchors_mask[l]=[0,1,2]
                 #----------------------------------------#
-                #   判断这个先验框是当前特征点的哪一个先验框
+                #   判断这个先验框是当前特征点的哪一个先验框------共有3个先验框，真实框属于是哪个尺度下第几个先验框
                 #----------------------------------------#
                 k = self.anchors_mask[l].index(best_n)
                 #----------------------------------------#
                 #   获得真实框属于哪个网格点，计算出真实坐标
                 #   long()表示向下取整可以找到左上角的网格点，因为yolo v3是根据左上角的网格点进行预测的
+                #   i,j是当前先验框对应特征层的哪一个网格点
                 #----------------------------------------#
                 i = torch.floor(batch_target[t, 0]).long()
                 j = torch.floor(batch_target[t, 1]).long()
@@ -372,7 +386,7 @@ class YOLOLoss(nn.Module):
 
                 #----------------------------------------#
                 #   noobj_mask代表无目标的特征点，
-                #   在前面定义了他的数据维度都是1，这里就利用目标检测确定的点位来置为0，表示没有目标
+                #   在前面定义了他的数据维度都是1，这里就利用目标检测确定的点位来置为0，表示有真实框存在于这个特征点
                 #----------------------------------------#
                 noobj_mask[b, k, j, i] = 0
                 #----------------------------------------#
@@ -392,6 +406,11 @@ class YOLOLoss(nn.Module):
                     y_true[b, k, j, i, c + 5] = 1
                 else:
                     #----------------------------------------#
+                                        #   tx、ty代表中心调整参数的真实值
+                    #   b:对应那张图片
+                    #   k:哪一个先验框（0-2）
+                    #   i:真实框位置
+                    #   j:真实框位置
                     #   tx、ty代表中心调整参数的真实值
                     #   y_true = 1,3,13,13，25，则结果就是哪有1，是哪一类
                     #----------------------------------------#
@@ -409,29 +428,38 @@ class YOLOLoss(nn.Module):
                 #----------------------------------------#
                 box_loss_scale[b, k, j, i] = batch_target[t, 2] * batch_target[t, 3] / in_w / in_h
         return y_true, noobj_mask, box_loss_scale
-
+                # 根据网络的预测结果获得预测框，计算预测框和所有真实框的重合程度，如果重合程度大于一定门限，则将该预测框对应的先验框忽略。其余作为负样本。
     def get_ignore(self, l, x, y, h, w, targets, scaled_anchors, in_h, in_w, noobj_mask):
         #-----------------------------------------------------#
         #   计算一共有多少张图片
         #   先根据预测结果进行一个解码
         #-----------------------------------------------------#
-        bs = len(targets)
+        bs = len(targets)   #   共一张图片
 
         #-----------------------------------------------------#
-        #   生成网格，先验框中心，网格左上角
+        #   生成网格，先验框中心，网格左上角-------
+        #   torch.linspace 函数的作用是，返回一个一维的tensor（张量）[start开始值 ,end结束值,steps：分割的点数，默认是100]
+        #   linspace(0,13-1,13)即生成0-12个共13个数据，重复行的维数为in_h，即生成in_w*in_h大小的二维网格，间距为1
+        #   以特征层13*13为例  grid_x为 【0-12】
+        #   grid_x torch.Size([1, 3, 13, 13])
+        #   grid_y torch.Size([1, 3, 13, 13])
+        #   view(x.shape)将数据调整为与x维度大小一致，数据类型一致type_as(x)
         #-----------------------------------------------------#
         grid_x = torch.linspace(0, in_w - 1, in_w).repeat(in_h, 1).repeat(
             int(bs * len(self.anchors_mask[l])), 1, 1).view(x.shape).type_as(x)
         grid_y = torch.linspace(0, in_h - 1, in_h).repeat(in_w, 1).t().repeat(
             int(bs * len(self.anchors_mask[l])), 1, 1).view(y.shape).type_as(x)
 
-        # 生成先验框的宽高
-        scaled_anchors_l = np.array(scaled_anchors)[self.anchors_mask[l]]
+        #   生成先验框的宽高
+        #   anchor_h torch.Size([1, 3, 13, 13])
+        #   anchor_w torch.Size([1, 3, 26, 26])
+        scaled_anchors_l = np.array(scaled_anchors)[self.anchors_mask[l]] # 从9个先验框里选出相应特征层的3个先验框
         anchor_w = torch.Tensor(scaled_anchors_l).index_select(1, torch.LongTensor([0])).type_as(x)
         anchor_h = torch.Tensor(scaled_anchors_l).index_select(1, torch.LongTensor([1])).type_as(x)
         
         anchor_w = anchor_w.repeat(bs, 1).repeat(1, 1, in_h * in_w).view(w.shape)
         anchor_h = anchor_h.repeat(bs, 1).repeat(1, 1, in_h * in_w).view(h.shape)
+        #   现在anchor_w，anchor_h  格式如上，里面的值是相应先验框的大小
         #-------------------------------------------------------#
         #   计算调整后的先验框中心与宽高
         #-------------------------------------------------------#
@@ -476,22 +504,33 @@ class YOLOLoss(nn.Module):
                 noobj_mask[b][anch_ious_max > self.ignore_threshold] = 0
         return noobj_mask, pred_boxes
 
-def weights_init(net, init_type='normal', init_gain = 0.02):
+def weights_init(net, init_type='normal', init_gain = 0.02):#假如不利用预训练权重和主干权重，
     def init_func(m):
         classname = m.__class__.__name__
         if hasattr(m, 'weight') and classname.find('Conv') != -1:
+            #   if语句头的意思是，m中是否有weight这个属性并且m的类名中是否有"Conv"。
             if init_type == 'normal':
+                # 从给定均值和标准差的正态分布N(0.0, init_gain)中生成值，填充输入的m.weight.data
                 torch.nn.init.normal_(m.weight.data, 0.0, init_gain)
             elif init_type == 'xavier':
+                # 用一个正态分布生成值，填充输入的张量或变量。结果张量中的值采样自均值为0，
+                # 标准差为gain * sqrt(2/(fan_in + fan_out))的正态分布。也被称为Glorot initialisation.
                 torch.nn.init.xavier_normal_(m.weight.data, gain=init_gain)
             elif init_type == 'kaiming':
+                # 用一个正态分布生成值，填充输入的张量或变量。结果张量中的值采样自均值为0，
+                # 标准差为sqrt(2/((1 + a^2) * fan_in))的正态分布。
                 torch.nn.init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
             elif init_type == 'orthogonal':
+                # 用（半）正交矩阵填充输入的张量或变量。输入张量必须至少是2维的，对于更高维度的张量，
+                # 超出的维度会被展平，视作行等于第一个维度，列等于稀疏矩阵乘积的2维表示。其中非零元素生成自均值为0，
+                # 标准差为std的正态分布。
                 torch.nn.init.orthogonal_(m.weight.data, gain=init_gain)
             else:
                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
         elif classname.find('BatchNorm2d') != -1:
+            #   elif语句头的意思是，m的；类名中是否有"BatchNorm2d"。
             torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
+            # 用val的值(0.0)填充输入的张量或变量(m.bias.data)
             torch.nn.init.constant_(m.bias.data, 0.0)
     print('initialize network with %s type' % init_type)
     net.apply(init_func)

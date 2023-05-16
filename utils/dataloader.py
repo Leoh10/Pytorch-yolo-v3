@@ -7,25 +7,30 @@ from torch.utils.data.dataset import Dataset
 from utils.utils import cvtColor, preprocess_input
 
 
-class YoloDataset(Dataset):
+class YoloDataset(Dataset):#类的继承
     def __init__(self, annotation_lines, input_shape, num_classes, train):
+        #   annotation_lines是训练集或验证集数据的绝对路径，input_shape是图片尺寸==416,416，num_classes是分类的总类别为20，train为True或False,
+        #   训练集就是True 验证集就是False
         super(YoloDataset, self).__init__()
         self.annotation_lines   = annotation_lines
         self.input_shape        = input_shape
         self.num_classes        = num_classes
-        self.length             = len(self.annotation_lines)
+        self.length             = len(self.annotation_lines)#   总的训练集或验证集的数据的个数
         self.train              = train
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, index):
-        index       = index % self.length
+        #   读取数据和标签
+        index       = index % self.length 
+        #   字符串操作 'abc %s' % 'abc' '%s'类似占位符类似占位符
         #---------------------------------------------------#
         #   训练时进行数据的随机增强
         #   验证时不进行数据的随机增强
         #---------------------------------------------------#
         image, box  = self.get_random_data(self.annotation_lines[index], self.input_shape[0:2], random = self.train)
+        #   preprocess_input归一化处理，然后transpose（x,(2,0,1)）将维度调换，将H,W,C变成C,H,W
         image       = np.transpose(preprocess_input(np.array(image, dtype=np.float32)), (2, 0, 1))
         box         = np.array(box, dtype=np.float32)
         if len(box) != 0:

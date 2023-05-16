@@ -38,6 +38,7 @@ from utils.utils_fit import fit_one_epoch
    如果只是训练了几个Step是不会保存的,Epoch和Step的概念要捋清楚一下。
 '''
 if __name__ == "__main__":
+
     #---------------------------------#
     #   Cuda    是否使用Cuda
     #           没有GPU可以设置成False
@@ -78,9 +79,10 @@ if __name__ == "__main__":
     #----------------------------------------------------------------------------------------------------------------------------#
     #
     # 
-    #   ---------提供的是预训练权重----coco数据集
+    #   ---------提供的是预训练权重----coco数据集----yolo_weights.pth----------整个模型的参数，
+
     # 
-    # 
+    #
     #   权值文件的下载请看README，可以通过网盘下载。模型的 预训练权重 对不同数据集是通用的，因为特征是通用的。
     #   模型的 预训练权重 比较重要的部分是 主干特征提取网络的权值部分，用于进行特征提取。
     #   预训练权重对于99%的情况都必须要用，不用的话主干部分的权值太过随机，特征提取效果不明显，网络训练的结果也不会好
@@ -99,7 +101,7 @@ if __name__ == "__main__":
     #----------------------------------------------------------------------------------------------------------------------------#
     model_path      = 'model_data/yolo_weights.pth'
     #------------------------------------------------------#
-    #   input_shape     输入的shape大小，一定要是32的倍数
+    #   input_shape     输入的shape大小，一定要是32的倍数---进行多尺度训练---320,320,640,640
     #------------------------------------------------------#
     input_shape     = [416, 416]
     #----------------------------------------------------------------------------------------------------------------------------#
@@ -193,6 +195,10 @@ if __name__ == "__main__":
     weight_decay        = 5e-4
     #------------------------------------------------------------------#
     #   lr_decay_type   使用到的学习率下降方式，可选的有step、cos
+    #   torch.optim.lr_sheduler接口实现学习率调整----
+    #   有序调整：等间隔调整（step）；多间隔调整（multistep）;指数衰减（exponential）;余弦退火（cosineAnnealing）
+    #   自适应调整：依训练状况伺机而变，通过监测某个指标的变化情况(loss、accuracy)，当该指标不怎么变化时，就是调整学习率的时机(ReduceLROnPlateau);
+    #   自定义调整：通过自定义关于epoch的lambda函数调整学习率(LambdaLR)
     #------------------------------------------------------------------#
     lr_decay_type       = "cos"
     #------------------------------------------------------------------#
@@ -228,7 +234,7 @@ if __name__ == "__main__":
     val_annotation_path     = '2007_val.txt'
 
     #------------------------------------------------------#
-    #   设置用到的显卡
+    #   设置用到的显卡------------固定代码-----------
     #------------------------------------------------------#
     ngpus_per_node  = torch.cuda.device_count()
     if distributed:
@@ -241,7 +247,8 @@ if __name__ == "__main__":
             print("Gpu Device Count : ", ngpus_per_node)
     else:
         device          = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        local_rank      = 0
+        local_rank      = 0#定义当前进程在计算机上的rank，由pytorch为用户填写，
+        #   会被自动赋值为当前进程在计算机的rank,优先级定义
 
     #----------------------------------------------------#
     #   获取classes和anchor
@@ -250,11 +257,19 @@ if __name__ == "__main__":
     anchors, num_anchors     = get_anchors(anchors_path)
         
     #------------------------------------------------------#
-    #   创建yolo模型
+    #   创建yolo模型-----------------------------
     #------------------------------------------------------#
     model = YoloBody(anchors_mask, num_classes, pretrained=pretrained)
+    #----------------------------------------------------------------------------------------------------------------------------#
+    #   pretrained      是否使用主干网络的预训练权重，此处使用的是主干的权重，因此是在模型构建的时候进行加载的。
+    #                   如果设置了model_path，则主干的权值无需加载，pretrained的值无意义。
+    #                   如果不设置model_path，pretrained = True，此时仅加载主干开始训练。
+    #                   如果不设置model_path，pretrained = False，Freeze_Train = Fasle，此时从0开始训练，且没有冻结主干的过程。
+    #   pretrained = False
+    #----------------------------------------------------------------------------------------------------------------------------#
     if not pretrained:
         weights_init(model)
+    #   先初始化模型权重，
     if model_path != '':
         #------------------------------------------------------#
         #   权值文件请看README，百度网盘下载
@@ -264,25 +279,27 @@ if __name__ == "__main__":
         
         #------------------------------------------------------#
         #   根据预训练权重的Key和模型的Key进行加载
+        #   权值是否匹配判断，若修改了主干网络，则预训练权重不能继续用，修改了neck和head的代码，主干的网络仍可以继续用
+        #   因为特征是相同的
         #------------------------------------------------------#
-        model_dict      = model.state_dict()
-        pretrained_dict = torch.load(model_path, map_location = device)
+        model_dict      = model.state_dict()                                #   将模型参数保存为字典dict形式---读取当前模型参数
+        pretrained_dict = torch.load(model_path, map_location = device)     #    将保存的预训练网络模型参数加载
         load_key, no_load_key, temp_dict = [], [], {}
-        for k, v in pretrained_dict.items():
+        for k, v in pretrained_dict.items():                                #   k是参数名  v是对应参数值
             if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
                 temp_dict[k] = v
                 load_key.append(k)
             else:
                 no_load_key.append(k)
-        model_dict.update(temp_dict)
-        model.load_state_dict(model_dict)
+        model_dict.update(temp_dict)                                        #   使用预训练的模型更新当前模型参数
+        model.load_state_dict(model_dict)                                   #   加载模型参数，要求保存的模型参数键值类型与模型完全一致
         #------------------------------------------------------#
         #   显示没有匹配上的Key
         #------------------------------------------------------#
         if local_rank == 0:
             print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
             print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
-            print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
+            print("\n\033[1;33;44m温馨提示,head部分没有载入是正常现象,Backbone部分没有载入是错误的。\033[0m")
 
     #----------------------#
     #   获得损失函数
