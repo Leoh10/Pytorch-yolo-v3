@@ -115,6 +115,9 @@ if __name__ == "__main__":
     #----------------------------------------------------------------------------------------------------------------------------#
     #   训练分为两个阶段，分别是冻结阶段和解冻阶段。设置冻结阶段是为了满足机器性能不足的同学的训练需求。
     #   冻结训练需要的显存较小，显卡非常差的情况下，可设置Freeze_Epoch等于UnFreeze_Epoch，此时仅仅进行冻结训练。
+    #   使用冻结训练原因：主干特征提取网络提取特征是通用的，将主干冻结起来训练可以加快训练效率，防止权值被破坏。
+    #   冻结阶段：模型主干被冻结，特征提取网络不发生变化，占用显存小，这时仅对网络进行微调；
+    #   解冻阶段：主干不被冻结，特征提取网络会发生改变，占用显存大，网络所有参数都发生改变。
     #      
     #   在此提供若干参数设置建议，各位训练者根据自己的需求进行灵活调整：
     #   （一）从整个模型的预训练权重开始训练： 
@@ -282,17 +285,18 @@ if __name__ == "__main__":
         #   权值是否匹配判断，若修改了主干网络，则预训练权重不能继续用，修改了neck和head的代码，主干的网络仍可以继续用
         #   因为特征是相同的
         #------------------------------------------------------#
-        model_dict      = model.state_dict()                                #   将模型参数保存为字典dict形式---读取当前模型参数
-        pretrained_dict = torch.load(model_path, map_location = device)     #    将保存的预训练网络模型参数加载
+        model_dict      = model.state_dict()                                        #   将模型参数保存为字典dict形式---读取当前模型参数
+        pretrained_dict = torch.load(model_path, map_location = device)             #    将保存的预训练网络模型参数加载
         load_key, no_load_key, temp_dict = [], [], {}
-        for k, v in pretrained_dict.items():                                #   k是参数名  v是对应参数值
-            if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
+        for k, v in pretrained_dict.items():                                        #   k是参数名  v是对应参数值
+            if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):   #判断参数是否匹配，以及参数的维数是否与参数值的维数一致
+                                                                                    #   令参数值与参数匹配，并且添加到load_key中
                 temp_dict[k] = v
                 load_key.append(k)
-            else:
+            else:                                                                   #   不匹配则将参数添加到no_load_key中
                 no_load_key.append(k)
-        model_dict.update(temp_dict)                                        #   使用预训练的模型更新当前模型参数
-        model.load_state_dict(model_dict)                                   #   加载模型参数，要求保存的模型参数键值类型与模型完全一致
+        model_dict.update(temp_dict)                                                #   使用预训练的模型更新当前模型参数
+        model.load_state_dict(model_dict)                                           #   加载模型参数，要求保存的模型参数键值类型与模型完全一致
         #------------------------------------------------------#
         #   显示没有匹配上的Key
         #------------------------------------------------------#
@@ -312,6 +316,7 @@ if __name__ == "__main__":
         time_str        = datetime.datetime.strftime(datetime.datetime.now(),'%Y_%m_%d_%H_%M_%S')
         log_dir         = os.path.join(save_dir, "loss_" + str(time_str))
         loss_history    = LossHistory(log_dir, model, input_shape=input_shape)
+        #   input_shape     = [416, 416]
     else:
         loss_history    = None
         
